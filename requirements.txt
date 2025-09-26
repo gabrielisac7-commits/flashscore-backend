@@ -1,7 +1,10 @@
 fastapi
 uvicorn
+pydantic
+scikit-learn
+pandas
+numpy
 requests
 beautifulsoup4
-joblib
-scikit-learn
+
 
