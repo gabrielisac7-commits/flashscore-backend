@@ -1,6 +1,6 @@
 fastapi
 uvicorn
+joblib
+numpy
+scikit-learn
 playwright
-beautifulsoup4
-pandas
-
