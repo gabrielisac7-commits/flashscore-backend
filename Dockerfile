@@ -1,31 +1,18 @@
-# Use official Python image
-FROM python:3.11-slim
+# Use lightweight Python image
+FROM python:3.10-slim
 
-# Set work directory
+# Set working directory
 WORKDIR /app
 
-# Install system deps
-RUN apt-get update && apt-get install -y curl wget unzip libnss3 libatk1.0-0 \
-    libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libasound2 libxrandr2 \
-    libxdamage1 libxcomposite1 libxext6 libxfixes3 libcairo2 libpango-1.0-0 \
-    libpangocairo-1.0-0 libgtk-3-0 chromium
-
-# Copy dependencies
+# Copy dependencies first (for caching)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright + Chromium
-RUN python -m playwright install --with-deps chromium
-
-# Copy app code
+# Copy project files
 COPY . .
 
-# Expose port
-ENV PORT=8000
+# Expose port (Railway/Heroku injects $PORT)
 EXPOSE 8000
 
-# Run app
-# Run app (Python will handle PORT from env)
+# Start app (main.py handles $PORT)
 CMD ["python", "main.py"]
-
-
