@@ -25,5 +25,7 @@ ENV PORT=8000
 EXPOSE 8000
 
 # Run app
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run app (Python will handle PORT from env)
+CMD ["python", "main.py"]
+
 
