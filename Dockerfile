@@ -46,5 +46,5 @@ RUN pip install playwright && playwright install chromium
 COPY . .
 
 # Run the FastAPI app with Uvicorn
+# Start FastAPI app
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
-
