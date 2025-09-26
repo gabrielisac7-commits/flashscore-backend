@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-playwright
 requests
 beautifulsoup4
-lxml
+playwright
