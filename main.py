@@ -1,129 +1,104 @@
-import os
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from typing import List, Dict, Any
+from pydantic import BaseModel
+from typing import List, Dict
+import joblib
+import numpy as np
+import os
 
-app = FastAPI()
+from playwright.sync_api import sync_playwright
 
-# === MODEL HELPERS ===
-def calc_c1(odds_home: float, odds_draw: float, odds_away: float) -> float:
-    """Pre-match confidence based on odds"""
-    implied_prob = (1/odds_home + 1/odds_draw + 1/odds_away)
-    c1 = (1/odds_home + 1/odds_away) / implied_prob
-    return round(min(0.95, max(0.50, c1)), 2)
+# -----------------------------
+# Load the trained model
+# -----------------------------
+MODEL_PATH = "final_model.pkl"
 
-def calc_c2(shots: int, xg: float, halftime_odds: float, c1: float) -> float:
-    """Halftime adjustment"""
-    raw = 0.4*c1 + 0.3*(shots/5) + 0.3*(xg/1.0)
-    odds_adj = 1 - (halftime_odds/3.0)
-    c2 = raw*0.8 + odds_adj*0.2
-    return round(min(0.95, max(0.50, c2)), 2)
+if not os.path.exists(MODEL_PATH):
+    raise RuntimeError("Model file not found. Make sure final_model.pkl is in /app.")
 
-def calc_c3(c2: float, momentum: float, live_odds: float) -> float:
-    """Min60 decision"""
-    raw = 0.6*c2 + 0.4*momentum
-    odds_adj = 1 - (live_odds/3.0)
-    c3 = raw*0.85 + odds_adj*0.15
-    return round(min(0.99, max(0.40, c3)), 2)
+model = joblib.load(MODEL_PATH)
 
-def stake_from_c3(bank: float, c3: float) -> str:
-    if c3 >= 0.9:
-        return f"{0.2*bank:.0f} RON"
-    elif c3 >= 0.75:
-        return f"{0.15*bank:.0f} RON"
-    elif c3 >= 0.6:
-        return f"{0.1*bank:.0f} RON"
-    else:
-        return f"{0.05*bank:.0f} RON"
+# -----------------------------
+# FastAPI app
+# -----------------------------
+app = FastAPI(title="Football Prediction API", version="1.0")
 
-# === SCRAPERS ===
-def scrape_with_playwright() -> List[Dict[str, Any]]:
-    from playwright.sync_api import sync_playwright
-    data: List[Dict[str, Any]] = []
+class PredictionRequest(BaseModel):
+    home_team: str
+    away_team: str
+    features: List[float]
+
+class PredictionResponse(BaseModel):
+    home_team: str
+    away_team: str
+    prediction: str
+    probabilities: Dict[str, float]
+
+
+# -----------------------------
+# Helper: scrape live matches
+# -----------------------------
+def scrape_live_matches():
+    matches = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page.goto("https://www.flashscore.com/football/", timeout=60_000)
+
+        # Example: Flashscore live matches
+        page.goto("https://www.flashscore.com/football/")
         page.wait_for_timeout(5000)
 
-        games = page.query_selector_all("div.event__match")
-        for g in games:
-            try:
-                stage = g.query_selector(".event__stage")
-                score = g.query_selector(".event__scores")
-                home = g.query_selector(".event__participant--home")
-                away = g.query_selector(".event__participant--away")
+        # Extract match info
+        match_elements = page.query_selector_all(".event__match")
+        for m in match_elements:
+            home = m.query_selector(".event__participant--home")
+            away = m.query_selector(".event__participant--away")
+            score = m.query_selector(".event__scores")
 
-                if not (stage and score and home and away):
-                    continue
+            if home and away:
+                matches.append({
+                    "home": home.inner_text().strip(),
+                    "away": away.inner_text().strip(),
+                    "score": score.inner_text().strip() if score else "0-0"
+                })
 
-                stage_text = stage.inner_text().strip()
-                score_text = score.inner_text().strip()
-
-                if ("Half" in stage_text or "HT" in stage_text) and score_text == "0-0":
-                    # Dummy example inputs (replace with real stats from deeper scrape)
-                    odds_home, odds_draw, odds_away = 2.0, 3.0, 3.5
-                    halftime_odds = 1.25
-                    shots, xg, momentum = 6, 0.9, 0.7
-
-                    c1 = calc_c1(odds_home, odds_draw, odds_away)
-                    c2 = calc_c2(shots, xg, halftime_odds, c1)
-                    c3 = calc_c3(c2, momentum, 1.28)
-                    stake = stake_from_c3(500, c3)
-
-                    data.append({
-                        "match": f"{home.inner_text().strip()} vs {away.inner_text().strip()}",
-                        "status": stage_text,
-                        "score": score_text,
-                        "C1": c1,
-                        "C2": c2,
-                        "C3": c3,
-                        "stake": stake,
-                        "source_mode": "playwright"
-                    })
-            except Exception:
-                continue
         browser.close()
-    return data
+    return matches
 
-def scrape_with_requests() -> List[Dict[str, Any]]:
-    import requests
-    from bs4 import BeautifulSoup
-    r = requests.get("https://www.flashscore.com/football/", headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-    soup = BeautifulSoup(r.text, "html.parser")
-    data: List[Dict[str, Any]] = []
-    for g in soup.select("div.event__match"):
-        stage = g.select_one(".event__stage")
-        score = g.select_one(".event__scores")
-        home  = g.select_one(".event__participant--home")
-        away  = g.select_one(".event__participant--away")
-        if not (stage and score and home and away):
-            continue
-        stage_text = stage.get_text(strip=True)
-        score_text = score.get_text(strip=True)
-        if ("Half" in stage_text or "HT" in stage_text) and score_text == "0-0":
-            data.append({
-                "match": f"{home.get_text(strip=True)} vs {away.get_text(strip=True)}",
-                "status": stage_text,
-                "score": score_text,
-                "note": "requests fallback"
-            })
-    return data
 
-# === ROUTES ===
+# -----------------------------
+# API Endpoints
+# -----------------------------
+
 @app.get("/")
 def root():
-    return {"ok": True, "hint": "Go to /live for 0-0 HT matches"}
+    return {"status": "ok", "message": "Football Prediction API is running 🚀"}
+
 
 @app.get("/live")
-def live():
+def live_matches():
     try:
-        try:
-            matches = scrape_with_playwright()
-            if not matches:
-                matches = scrape_with_requests()
-        except Exception:
-            matches = scrape_with_requests()
-        return {"matches": matches}
+        matches = scrape_live_matches()
+        return {"count": len(matches), "matches": matches}
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/predict", response_model=PredictionResponse)
+def predict(req: PredictionRequest):
+    # Model expects numerical features
+    X = np.array(req.features).reshape(1, -1)
+    pred = model.predict(X)[0]
+    proba = model.predict_proba(X)[0]
+
+    result = PredictionResponse(
+        home_team=req.home_team,
+        away_team=req.away_team,
+        prediction=pred,
+        probabilities={
+            "home_win": float(proba[0]),
+            "draw": float(proba[1]),
+            "away_win": float(proba[2]),
+        },
+    )
+    return result
